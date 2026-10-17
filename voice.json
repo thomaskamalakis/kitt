@@ -1,0 +1,10 @@
+{
+  "speed": 0.9,
+  "ring_mix": 0.04,
+  "ring_hz": 90,
+  "comb_ms": 4.0,
+  "comb_gain": 0.12,
+  "band_lo": 120,
+  "band_hi": 7000,
+  "drive": 1.1
+}
