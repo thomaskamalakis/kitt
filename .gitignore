@@ -2,3 +2,4 @@
 __pycache__/
 voices/
 history.json
+llm.json

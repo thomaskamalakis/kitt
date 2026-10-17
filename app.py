@@ -8,9 +8,10 @@ import wave
 
 import numpy as np
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit,
+from PyQt5.QtWidgets import (QPlainTextEdit, QApplication, QHBoxLayout, QLabel, QLineEdit,
                              QPushButton, QVBoxLayout, QWidget, QGridLayout)
 
+import llm
 import tts
 from tune import TunePanel
 from voicebox import VoiceBox
@@ -88,19 +89,38 @@ def kitt_button(text, bg, pill=False, fg="#000", cruise=False, width=None):
     return b
 
 
+class StatusBox(QPlainTextEdit):
+    """Fixed-height message area (scrolls if long) so the layout never shifts."""
+
+    def __init__(self, lines=4):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setFrameShape(QPlainTextEdit.NoFrame)
+        self.setFixedHeight(self.fontMetrics().lineSpacing() * lines + 8)
+
+    def setText(self, text):
+        self.setPlainText(text)
+
+
 class Worker(QThread):
     ready = pyqtSignal(object, int)
     failed = pyqtSignal(str)
     progress = pyqtSignal(int)
+    reply = pyqtSignal(str)
 
-    def __init__(self, text):
+    def __init__(self, text, chat=False, history=()):
         super().__init__()
-        self.text = text
+        self.text, self.chat, self.history = text, chat, list(history)
 
     def run(self):
         try:
             tts.progress = self.progress.emit
-            self.ready.emit(*tts.synthesize(self.text))
+            text = self.text
+            if self.chat:
+                text = llm.ask(self.history, self.text)
+                self.reply.emit(text)
+            self.ready.emit(*tts.synthesize(text))
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -116,10 +136,21 @@ class Window(QWidget):
         self.edit = HistoryEdit()
         self.edit.setPlaceholderText("Say something to KITT...")
         self.btn = QPushButton("Speak")
-        self.status = QLabel("Ready")
+        self.status = StatusBox()
+        self.status.setText("Ready")
+        self.history = []      # chat messages [{role, content}, ...]
+        self.last_spoken = ""  # what Tune > Replay repeats
         row = QHBoxLayout()
         row.addWidget(self.edit)
         row.addWidget(self.btn)
+        self.chat_btn = QPushButton("Echo")
+        self.chat_btn.setCheckable(True)
+        self.chat_btn.setFocusPolicy(Qt.NoFocus)
+        self.chat_btn.setToolTip("Echo: repeat the sentence. Chat: ask Qwen and speak its answer")
+        self.chat_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 14px}"
+                                    "QPushButton:checked{background:#ff2a0a;color:#000}")
+        self.chat_btn.toggled.connect(lambda on: self.chat_btn.setText("Chat" if on else "Echo"))
+        row.addWidget(self.chat_btn)
         self.tune_btn = QPushButton("Tune")
         self.tune_btn.setFocusPolicy(Qt.NoFocus)
         self.tune_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 14px}")
@@ -178,11 +209,11 @@ class Window(QWidget):
         if not text or not self.btn.isEnabled():
             return
         self.edit.remember(text)
-        self._run(text)
+        self._run(text, self.chat_btn.isChecked())
 
     def replay(self):
-        if getattr(self, "last_text", None) and self.btn.isEnabled():
-            self._run(self.last_text)
+        if self.last_spoken and self.btn.isEnabled():
+            self._run(self.last_spoken)
 
     def open_tune(self):
         if not hasattr(self, "tune"):
@@ -190,16 +221,25 @@ class Window(QWidget):
         self.tune.show()
         self.tune.raise_()
 
-    def _run(self, text):
-        self.last_text = text
+    def _run(self, text, chat=False):
+        self.last_spoken = text
+        self._reply = None
         self.btn.setEnabled(False)
         self.edit.setEnabled(False)
         self.status.setText("Downloading voice..." if tts.needs_download() else "Thinking...")
-        self.worker = Worker(text)
+        self.worker = Worker(text, chat, self.history)
+        self.worker.reply.connect(lambda r: self._got_reply(text, r))
         self.worker.ready.connect(self.play)
         self.worker.failed.connect(self.error)
         self.worker.progress.connect(lambda p: self.status.setText(f"Downloading voice... {p}%"))
         self.worker.start()
+
+    def _got_reply(self, question, reply):
+        self._reply = reply
+        self.last_spoken = reply
+        self.history += [{"role": "user", "content": question},
+                         {"role": "assistant", "content": reply}]
+        del self.history[:-2 * llm.MAX_TURNS]
 
     def play(self, samples, sr):
         fd, path = tempfile.mkstemp(suffix=".wav")
@@ -212,7 +252,7 @@ class Window(QWidget):
         self.proc = play_wav(path)
         if self.proc is None:
             return self.error("No audio player (pw-play/aplay) found")
-        self.status.setText("Speaking...")
+        self.status.setText("KITT: " + self._reply if self._reply else "Speaking...")
         self.box.start(samples, sr, time.monotonic() + 0.05)
         self._path = path
         from PyQt5.QtCore import QTimer
@@ -241,6 +281,6 @@ class Window(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = Window()
-    win.resize(400, 660)
+    win.resize(400, 770)
     win.show()
     sys.exit(app.exec_())
