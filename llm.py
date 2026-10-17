@@ -2,16 +2,27 @@
 import json
 import os
 import re
+import time
 
 import requests
+
+import tools
 
 SYSTEM_PROMPT = (
     "You are K.I.T.T., the Knight Industries Two Thousand: a calm, polite, precise and "
     "slightly witty artificial intelligence, the talking car from Knight Rider. "
     "Answer in English in one to three short sentences. Your reply is spoken aloud, so use "
-    "plain text only: no markdown, no lists, no emoji."
+    "plain text only: no markdown, no lists, no emoji. "
+    "You have tools: use get_weather for weather questions and web_search for current events "
+    "or facts you do not know, then answer from the results. Say units in words (for example "
+    "'degrees Celsius') and never read out URLs."
 )
+
+
+def system_prompt():
+    return SYSTEM_PROMPT + " Current local date and time: " + time.strftime("%A %d %B %Y, %H:%M") + "."
 MAX_TURNS = 10
+MAX_TOOL_ROUNDS = 3
 
 
 class LLMError(Exception):
@@ -74,26 +85,14 @@ def list_models(base_url=None, api_key=None):
         raise LLMError("Unexpected response from LLM server")
 
 
-def ask(history, text):
-    """Send the conversation so far plus `text`; return the cleaned reply."""
-    url = _env("base_url").rstrip("/") + "/chat/completions"
-    body = {
-        "model": _env("model"),
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                     *history[-2 * MAX_TURNS:],
-                     {"role": "user", "content": text}],
-        "temperature": 0.7,
-        "max_tokens": 400,
-        # Qwen3 "thinking" can eat the whole token budget and leave the reply empty;
-        # spoken answers don't need it.
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    headers = {"Authorization": "Bearer " + _env("api_key")}
+def _post(url, body, headers):
+    """POST with graceful degradation: drop optional parameters a server rejects with 400."""
     try:
         r = requests.post(url, json=body, headers=headers, timeout=60)
-        if r.status_code == 400:      # some models/providers reject the extra parameter
-            body.pop("chat_template_kwargs")
-            r = requests.post(url, json=body, headers=headers, timeout=60)
+        for optional in ("chat_template_kwargs", "tools"):
+            if r.status_code == 400 and optional in body:
+                body.pop(optional)
+                r = requests.post(url, json=body, headers=headers, timeout=60)
     except requests.Timeout:
         raise LLMError("LLM request timed out")
     except requests.RequestException as e:
@@ -103,10 +102,44 @@ def ask(history, text):
     if not r.ok:
         raise LLMError(f"LLM error {r.status_code}: {r.text[:120]}")
     try:
-        choice = r.json()["choices"][0]
-        reply = clean(choice["message"]["content"] or "")
+        return r.json()["choices"][0]
     except (ValueError, KeyError, IndexError, TypeError):
         raise LLMError("Unexpected response from LLM server")
+
+
+def ask(history, text, on_status=None):
+    """Send the conversation so far plus `text`; run any tools the model asks for;
+    return the cleaned reply."""
+    url = _env("base_url").rstrip("/") + "/chat/completions"
+    headers = {"Authorization": "Bearer " + _env("api_key")}
+    messages = [{"role": "system", "content": system_prompt()},
+                *history[-2 * MAX_TURNS:],
+                {"role": "user", "content": text}]
+    for round_ in range(MAX_TOOL_ROUNDS + 1):
+        body = {
+            "model": _env("model"),
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 400,
+            # Qwen3 "thinking" can eat the whole token budget and leave the reply empty;
+            # spoken answers don't need it.
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if round_ < MAX_TOOL_ROUNDS:      # the last round must answer in text
+            body["tools"] = tools.TOOL_SPECS
+        choice = _post(url, body, headers)
+        message = choice["message"]
+        calls = message.get("tool_calls")
+        if not calls:
+            break
+        messages.append({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
+        for call in calls:
+            name = call["function"]["name"]
+            if on_status:
+                on_status(tools.STATUS.get(name, "Working..."))
+            messages.append({"role": "tool", "tool_call_id": call["id"],
+                             "content": tools.run(name, call["function"].get("arguments"))})
+    reply = clean(message.get("content") or "")
     if not reply:
         why = " (ran out of tokens while thinking)" if choice.get("finish_reason") == "length" else ""
         raise LLMError("LLM returned an empty reply" + why)

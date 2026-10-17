@@ -108,6 +108,7 @@ class Worker(QThread):
     failed = pyqtSignal(str)
     progress = pyqtSignal(int)
     reply = pyqtSignal(str)
+    status = pyqtSignal(str)
 
     def __init__(self, text, chat=False, history=()):
         super().__init__()
@@ -118,7 +119,7 @@ class Worker(QThread):
             tts.progress = self.progress.emit
             text = self.text
             if self.chat:
-                text = llm.ask(self.history, self.text)
+                text = llm.ask(self.history, self.text, self.status.emit)
                 self.reply.emit(text)
             self.ready.emit(*tts.synthesize(text))
         except Exception as e:
@@ -150,6 +151,7 @@ class Window(QWidget):
         self.chat_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 14px}"
                                     "QPushButton:checked{background:#ff2a0a;color:#000}")
         self.chat_btn.toggled.connect(lambda on: self.chat_btn.setText("Chat" if on else "Echo"))
+        self.chat_btn.setChecked(True)   # Chat is the default mode
         row.addWidget(self.chat_btn)
         self.tune_btn = QPushButton("Tune")
         self.tune_btn.setFocusPolicy(Qt.NoFocus)
@@ -228,6 +230,7 @@ class Window(QWidget):
         self.edit.setEnabled(False)
         self.status.setText("Downloading voice..." if tts.needs_download() else "Thinking...")
         self.worker = Worker(text, chat, self.history)
+        self.worker.status.connect(self.status.setText)
         self.worker.reply.connect(lambda r: self._got_reply(text, r))
         self.worker.ready.connect(self.play)
         self.worker.failed.connect(self.error)

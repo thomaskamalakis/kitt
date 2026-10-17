@@ -17,3 +17,9 @@ Configure it in **Tune → LLM** (saved to the gitignored `llm.json`, readable o
     export LITELLM_MODEL=<qwen-model-alias>
     export LITELLM_API_KEY=<key>
     .venv/bin/python app.py
+
+### Internet access
+
+In Chat mode the model can call two tools: **get_weather** (Open-Meteo, no key) and
+**web_search** (DuckDuckGo via `ddgs`, no key). Place names and search text are sent to those
+services. Ask e.g. "What's the weather in Marousi?".
