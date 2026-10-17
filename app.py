@@ -91,6 +91,7 @@ def kitt_button(text, bg, pill=False, fg="#000", cruise=False, width=None):
 class Worker(QThread):
     ready = pyqtSignal(object, int)
     failed = pyqtSignal(str)
+    progress = pyqtSignal(int)
 
     def __init__(self, text):
         super().__init__()
@@ -98,6 +99,7 @@ class Worker(QThread):
 
     def run(self):
         try:
+            tts.progress = self.progress.emit
             self.ready.emit(*tts.synthesize(self.text))
         except Exception as e:
             self.failed.emit(str(e))
@@ -192,10 +194,11 @@ class Window(QWidget):
         self.last_text = text
         self.btn.setEnabled(False)
         self.edit.setEnabled(False)
-        self.status.setText("Thinking...")
+        self.status.setText("Downloading voice..." if tts.needs_download() else "Thinking...")
         self.worker = Worker(text)
         self.worker.ready.connect(self.play)
         self.worker.failed.connect(self.error)
+        self.worker.progress.connect(lambda p: self.status.setText(f"Downloading voice... {p}%"))
         self.worker.start()
 
     def play(self, samples, sr):

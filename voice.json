@@ -6,5 +6,6 @@
   "comb_gain": 0.12,
   "band_lo": 120,
   "band_hi": 7000,
-  "drive": 1.1
+  "drive": 1.1,
+  "voice": 5
 }

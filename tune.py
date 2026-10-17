@@ -1,6 +1,6 @@
 """Non-modal voice tuning panel: sliders for the tts effect parameters."""
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QDialog, QFormLayout, QHBoxLayout, QLabel,
+from PyQt5.QtWidgets import (QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel,
                              QPushButton, QSlider, QVBoxLayout)
 
 import tts
@@ -25,6 +25,11 @@ class TunePanel(QDialog):
         self.replay = replay
         self.rows = {}
         form = QFormLayout()
+        self.voice_box = QComboBox()
+        self.voice_box.addItems([v[0] for v in tts.VOICES])
+        self.voice_box.setCurrentIndex(tts.voice_index)
+        self.voice_box.currentIndexChanged.connect(tts.set_voice)   # new voice loads on next Replay
+        form.addRow("Voice", self.voice_box)
         for key, label, lo, hi, step in SLIDERS:
             s = QSlider(Qt.Horizontal)
             s.setRange(0, int(round((hi - lo) / step)))
@@ -45,7 +50,7 @@ class TunePanel(QDialog):
         lay = QVBoxLayout(self)
         lay.addLayout(form)
         lay.addLayout(buttons)
-        self.resize(420, 320)
+        self.resize(420, 360)
         self._load(tts.PARAMS)
 
     def _changed(self, key, value, label):
