@@ -34,6 +34,7 @@ DEFAULTS = {
     "ring_hz": 90.0,
     "comb_ms": 4.0,      # short comb delay for a "voice box" resonance
     "comb_gain": 0.12,
+    "eq": [],            # matching EQ: dB gain per EQ_FREQS band (measured from a reference clip)
     "presence": 0.0,     # dB boost of the upper mids (above ~1 kHz) for a nasal, "speaker" tone
     "band_lo": 120.0,    # band-pass edges (Hz)
     "band_hi": 7000.0,
@@ -108,6 +109,17 @@ def _bandpass(x, sr, lo, hi):
     return np.fft.irfft(spec * mask, len(x))
 
 
+EQ_FREQS = [100 * 2 ** (i / 3) for i in range(20)]   # 1/3-octave centres, 100 Hz .. ~8 kHz
+
+
+def _eq(x, sr, gains_db):
+    if not gains_db:
+        return x
+    freqs = np.fft.rfftfreq(len(x), 1.0 / sr)
+    g = np.interp(np.log(np.maximum(freqs, 1.0)), np.log(EQ_FREQS), gains_db)
+    return np.fft.irfft(np.fft.rfft(x) * 10 ** (g / 20), len(x))
+
+
 def _presence(x, sr, db):
     if not db:
         return x
@@ -126,6 +138,7 @@ def kitt_effect(x, sr, p=None):
     d = max(1, int(sr * p["comb_ms"] / 1000))
     y = x.copy()
     y[d:] += p["comb_gain"] * x[:-d]
+    y = _eq(y, sr, p["eq"])
     y = _presence(y, sr, p["presence"])
     y = _bandpass(y, sr, p["band_lo"], p["band_hi"])
     y = np.tanh(p["drive"] * y / (np.max(np.abs(y)) + 1e-9))
