@@ -9,10 +9,12 @@ import tts
 # key, label, min, max, step
 SLIDERS = [
     ("speed", "Pitch / speed", 0.70, 1.10, 0.01),
+    ("length", "Pace (slower →)", 0.6, 1.6, 0.01),
     ("ring_mix", "Metallic (ring mod)", 0.0, 0.5, 0.01),
     ("ring_hz", "Ring freq (Hz)", 30, 300, 1),
     ("comb_gain", "Resonance", 0.0, 0.8, 0.01),
     ("comb_ms", "Resonance delay (ms)", 1.0, 12.0, 0.1),
+    ("presence", "Presence (dB)", 0, 15, 0.5),
     ("band_lo", "Low cut (Hz)", 50, 600, 10),
     ("band_hi", "High cut (Hz)", 2000, 10000, 100),
     ("drive", "Drive", 0.5, 4.0, 0.05),

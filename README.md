@@ -23,3 +23,10 @@ Configure it in **Tune → LLM** (saved to the gitignored `llm.json`, readable o
 In Chat mode the model can call two tools: **get_weather** (Open-Meteo, no key) and
 **web_search** (DuckDuckGo via `ddgs`, no key). Place names and search text are sent to those
 services. Ask e.g. "What's the weather in Marousi?".
+
+## Talking to KITT (speech input)
+
+Press **Mic**, speak in English, and pause: KITT transcribes what you said locally
+(faster-whisper `base.en`, downloaded on first use, ~140 MB), then answers in Chat mode.
+Press **Mic** again to cancel. Audio never leaves the machine; it uses the system default
+microphone (`pw-record`/`arecord`).

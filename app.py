@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (QPlainTextEdit, QApplication, QHBoxLayout, QLabel, 
                              QPushButton, QVBoxLayout, QWidget, QGridLayout)
 
 import llm
+import stt
 import tts
 from tune import TunePanel
 from voicebox import VoiceBox
@@ -126,6 +127,29 @@ class Worker(QThread):
             self.failed.emit(str(e))
 
 
+class Listener(QThread):
+    heard = pyqtSignal(str)
+    failed = pyqtSignal(str)
+    status = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.cancelled = False
+
+    def run(self):
+        try:
+            self.status.emit("Listening...")
+            samples = stt.record(lambda: self.cancelled)
+            if self.cancelled:
+                return self.heard.emit("")
+            if samples is None:
+                return self.failed.emit("I didn't hear anything")
+            self.status.emit("Loading speech model..." if not stt.model_loaded() else "Understanding...")
+            self.heard.emit(stt.transcribe(samples))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class Window(QWidget):
     def __init__(self):
         super().__init__()
@@ -148,17 +172,25 @@ class Window(QWidget):
         self.chat_btn.setCheckable(True)
         self.chat_btn.setFocusPolicy(Qt.NoFocus)
         self.chat_btn.setToolTip("Echo: repeat the sentence. Chat: ask Qwen and speak its answer")
-        self.chat_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 14px}"
+        self.chat_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 9px}"
                                     "QPushButton:checked{background:#ff2a0a;color:#000}")
         self.chat_btn.toggled.connect(lambda on: self.chat_btn.setText("Chat" if on else "Echo"))
         self.chat_btn.setChecked(True)   # Chat is the default mode
         row.addWidget(self.chat_btn)
+        self.mic_btn = QPushButton("Mic")
+        self.mic_btn.setCheckable(True)
+        self.mic_btn.setFocusPolicy(Qt.NoFocus)
+        self.mic_btn.setToolTip("Talk to KITT (English)")
+        self.mic_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 9px}"
+                                   "QPushButton:checked{background:#ff2a0a;color:#000}")
+        self.mic_btn.clicked.connect(self.listen)
+        row.addWidget(self.mic_btn)
         self.tune_btn = QPushButton("Tune")
         self.tune_btn.setFocusPolicy(Qt.NoFocus)
-        self.tune_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 14px}")
+        self.tune_btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 9px}")
         self.tune_btn.clicked.connect(self.open_tune)
         row.addWidget(self.tune_btn)
-        self.btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 14px}QPushButton:disabled{color:#6a0a05;border-color:#6a0a05}")
+        self.btn.setStyleSheet("QPushButton{border:1px solid #ff2a0a;padding:6px 9px}QPushButton:disabled{color:#6a0a05;border-color:#6a0a05}")
         RED, ORG, YEL, BLU = "#e8200a", "#ff8c3c", "#f5f000", "#2a50ff"
         top = QHBoxLayout()
         topcol = QVBoxLayout()
@@ -205,6 +237,7 @@ class Window(QWidget):
         self.btn.clicked.connect(self.speak)
         self.worker = None
         self.proc = None
+        self.listener = None
 
     def speak(self):
         text = self.edit.text().strip()
@@ -212,6 +245,42 @@ class Window(QWidget):
             return
         self.edit.remember(text)
         self._run(text, self.chat_btn.isChecked())
+
+    def listen(self):
+        if self.listener is not None:          # second click cancels
+            self.listener.cancelled = True
+            return
+        if not stt.available():
+            self.mic_btn.setChecked(False)
+            return self.status.setText("Error: no recorder (pw-record/arecord) found")
+        if not self.btn.isEnabled():           # KITT is busy
+            self.mic_btn.setChecked(False)
+            return
+        self.btn.setEnabled(False)
+        self.edit.setEnabled(False)
+        self.listener = Listener()
+        self.listener.status.connect(self.status.setText)
+        self.listener.heard.connect(self._heard)
+        self.listener.failed.connect(self._listen_failed)
+        self.listener.start()
+
+    def _listen_done(self):
+        self.listener.wait()
+        self.listener = None
+        self.mic_btn.setChecked(False)
+        self.btn.setEnabled(True)
+        self.edit.setEnabled(True)
+
+    def _heard(self, text):
+        self._listen_done()
+        if not text:
+            return self.finish("Ready")
+        self.edit.setText(text)
+        self.speak()
+
+    def _listen_failed(self, msg):
+        self._listen_done()
+        self.finish(msg if msg.startswith("I didn't") else "Error: " + msg)
 
     def replay(self):
         if self.last_spoken and self.btn.isEnabled():

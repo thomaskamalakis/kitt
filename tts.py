@@ -29,10 +29,12 @@ VOICES = [
 # Effect parameters; defaults can be overridden by voice.json (written by the tuning panel)
 DEFAULTS = {
     "speed": 0.90,       # <1 = deeper and slower
+    "length": 1.0,       # Piper length_scale: >1 = slower speech, same pitch
     "ring_mix": 0.04,    # ring modulation amount (metallic)
     "ring_hz": 90.0,
     "comb_ms": 4.0,      # short comb delay for a "voice box" resonance
     "comb_gain": 0.12,
+    "presence": 0.0,     # dB boost of the upper mids (above ~1 kHz) for a nasal, "speaker" tone
     "band_lo": 120.0,    # band-pass edges (Hz)
     "band_hi": 7000.0,
     "drive": 1.1,        # soft-clip drive
@@ -106,6 +108,15 @@ def _bandpass(x, sr, lo, hi):
     return np.fft.irfft(spec * mask, len(x))
 
 
+def _presence(x, sr, db):
+    if not db:
+        return x
+    freqs = np.fft.rfftfreq(len(x), 1.0 / sr)
+    shelf = np.clip((freqs - 500.0) / 700.0, 0, 1)
+    gain = 1 + (10 ** (db / 20) - 1) * shelf
+    return np.fft.irfft(np.fft.rfft(x) * gain, len(x))
+
+
 def kitt_effect(x, sr, p=None):
     p = p or PARAMS
     n = int(len(x) / p["speed"])
@@ -115,6 +126,7 @@ def kitt_effect(x, sr, p=None):
     d = max(1, int(sr * p["comb_ms"] / 1000))
     y = x.copy()
     y[d:] += p["comb_gain"] * x[:-d]
+    y = _presence(y, sr, p["presence"])
     y = _bandpass(y, sr, p["band_lo"], p["band_hi"])
     y = np.tanh(p["drive"] * y / (np.max(np.abs(y)) + 1e-9))
     return (0.9 * y / (np.max(np.abs(y)) + 1e-9)).astype(np.float32)
@@ -127,9 +139,12 @@ def synthesize(text):
     """Return (float32 samples in [-1, 1], sample_rate). Piper output of the
     last text is cached so effect changes can be re-applied instantly."""
     global _raw_cache
-    if _raw_cache[0] != text:
-        chunks = list(_load().synthesize(text))
+    key = (text, PARAMS["length"])
+    if _raw_cache[0] != key:
+        from piper import SynthesisConfig
+        cfg = SynthesisConfig(length_scale=PARAMS["length"])
+        chunks = list(_load().synthesize(text, cfg))
         x = np.concatenate([c.audio_float_array for c in chunks]).astype(np.float64)
-        _raw_cache = (text, x, chunks[0].sample_rate)
+        _raw_cache = (key, x, chunks[0].sample_rate)
     _, x, sr = _raw_cache
     return kitt_effect(x, sr), sr
